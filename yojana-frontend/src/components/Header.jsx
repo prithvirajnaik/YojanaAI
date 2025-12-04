@@ -12,7 +12,7 @@ export default function Header() {
                 <nav className="flex gap-6 text-sm font-medium text-gray-300">
                     <Link to="/" className="hover:text-white transition">Home</Link>
                     <Link to="/chat" className="hover:text-white transition">Chat</Link>
-                    <a href="#" className="hover:text-white transition">About</a>
+                    {/* <a href="#" className="hover:text-white transition">About</a> */}
                 </nav>
             </div>
         </header>

@@ -27,9 +27,9 @@ export default function LandingPage() {
                         >
                             Get Started
                         </Link>
-                        <button className="px-8 py-4 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl font-semibold text-lg transition border border-gray-700">
+                        {/* <button className="px-8 py-4 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl font-semibold text-lg transition border border-gray-700">
                             Learn More
-                        </button>
+                        </button> */}
                     </div>
                 </div>
             </section>
