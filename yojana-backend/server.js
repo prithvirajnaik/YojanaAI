@@ -4,10 +4,16 @@ const fs = require('fs');
 const path = require('path');
 const Fuse = require('fuse.js');
 const cors = require('cors');
+require('dotenv').config();
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(bodyParser.json());
 app.use(cors());
+
+// ------------------ AI Setup ------------------
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "API_KEY_MISSING");
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // ------------------ Load Data ------------------
 const DATA_PATH = path.join(__dirname, 'output', 'schemes_parsed.json');
@@ -107,9 +113,9 @@ function simpleParse(text) {
   const income = parseUserIncome(t);
 
   const states = [
-    "karnataka","maharashtra","uttar pradesh","bihar","tamil nadu","kerala","gujarat",
-    "rajasthan","west bengal","delhi","madhya pradesh","punjab","haryana","odisha",
-    "andhra pradesh","telangana","assam","jharkhand"
+    "karnataka", "maharashtra", "uttar pradesh", "bihar", "tamil nadu", "kerala", "gujarat",
+    "rajashtra", "west bengal", "delhi", "madhya pradesh", "punjab", "haryana", "odisha",
+    "andhra pradesh", "telangana", "assam", "jharkhand"
   ];
   let state = null;
   for (const s of states) if (t.includes(s)) state = s;
@@ -201,12 +207,20 @@ app.post("/recommend", (req, res) => {
     }
   }
 
-  // Strict filter (soft conditions)
+  // STRICT FILTERING (income, state, gender)
   const filtered = candidates.filter(s => {
+    const schemeGender = (s.gender || "").toLowerCase();
+    const userGender = (user.gender || "").toLowerCase();
+
+    // STRICT GENDER FILTER:
+    if (userGender) {
+      if (userGender === "female" && schemeGender === "male") return false;
+      if (userGender === "male" && schemeGender === "female") return false;
+    }
+
     return (
       checkIncome(user.income, parseSchemeIncome(s.income_limit)) &&
-      checkState(user.state, s.state_or_scope) &&
-      checkGender(user.gender, s.gender)
+      checkState(user.state, s.state_or_scope)
     );
   });
 
@@ -223,27 +237,21 @@ app.post("/recommend", (req, res) => {
   // ⭐ SCORE FUNCTION with keyword awareness
   function scoreScheme(scheme) {
     const text = originalText;
-
     let score = 0;
 
-    // STRONG matching keywords
     if (text.includes("student") && scheme.target_groups?.includes("student")) score += 20;
     if (text.includes("farmer") && scheme.target_groups?.includes("farmer")) score += 20;
     if (text.includes("entrepreneur") && scheme.details?.toLowerCase().includes("entrepreneur")) score += 15;
     if (text.includes("scholarship") && scheme.schemeCategory?.toLowerCase().includes("scholar")) score += 25;
 
-    // Base score (soft matching)
     if (checkTargets(user.tags, scheme.target_groups)) score += 5;
     if (checkState(user.state, scheme.state_or_scope)) score += 3;
-    if (checkGender(user.gender, scheme.gender)) score += 2;
     if (checkIncome(user.income, parseSchemeIncome(scheme.income_limit))) score += 2;
 
-    // Prefer concise readable schemes
     if (scheme.details && scheme.details.length < 300) score += 3;
 
-    // Penalize schemes with no filtering criteria (too generic)
     if (!scheme.income_limit && (!scheme.gender || scheme.gender === "all") &&
-        (scheme.state_or_scope === "All" || !scheme.state_or_scope)) score -= 5;
+      (scheme.state_or_scope === "All" || !scheme.state_or_scope)) score -= 5;
 
     return score;
   }
@@ -254,7 +262,7 @@ app.post("/recommend", (req, res) => {
     score: scoreScheme(s)
   }));
 
-  // ⭐ Diversity Booster (avoid same ministry/state spam)
+  // ⭐ Diversity Booster
   function diversityAdjust(list) {
     const seenMinistry = new Set();
     const seenCategory = new Set();
@@ -271,29 +279,25 @@ app.post("/recommend", (req, res) => {
   }
 
   scored = diversityAdjust(scored);
-
   scored.sort((a, b) => b.score - a.score);
 
-  // ⭐ Shuffle ties (makes combinations different each time)
+  // Shuffle ties
   function randomizeTie(list) {
     const result = [];
     let i = 0;
 
     while (i < list.length) {
-      const baseScore = list[i].score;
+      const base = list[i].score;
       let group = [list[i]];
       let j = i + 1;
 
-      while (j < list.length && list[j].score === baseScore) {
+      while (j < list.length && list[j].score === base) {
         group.push(list[j]);
         j++;
       }
 
-      // Shuffle group
       group = group.sort(() => Math.random() - 0.5);
-
       result.push(...group);
-
       i = j;
     }
 
@@ -301,7 +305,6 @@ app.post("/recommend", (req, res) => {
   }
 
   scored = randomizeTie(scored);
-
   const topItems = scored.slice(0, 8).map(x => x.scheme);
 
   res.json({
@@ -311,6 +314,7 @@ app.post("/recommend", (req, res) => {
     user
   });
 });
+
 
 
 // Get single scheme
@@ -420,6 +424,81 @@ app.get("/pdf/:slug", (req, res) => {
 
   doc.end();
 });
+
+
+
+
+// ------------------ AI Chat Endpoint ------------------
+app.post("/ai-chat", async (req, res) => {
+  try {
+    const { query, schemeContext, userProfile } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "Query is required" });
+    }
+
+    // Build prompt
+    let prompt = `You are YojanaAI, a helpful government scheme assistant.
+User Query: ${query}
+`;
+
+    if (schemeContext) {
+      prompt += `
+Scheme Details:
+Name: ${schemeContext.scheme_name || "N/A"}
+Eligibility: ${schemeContext.raw_eligibility || "N/A"}
+Benefits: ${schemeContext.benefits || "N/A"}
+Documents Required: ${schemeContext.documents || "N/A"}
+`;
+    }
+
+    if (userProfile) {
+      prompt += `
+User Details:
+Age: ${userProfile.age || "N/A"}
+Gender: ${userProfile.gender || "N/A"}
+State: ${userProfile.state || "N/A"}
+Income: ${userProfile.income || "N/A"}
+Tags: ${userProfile.tags?.join(", ") || "None"}
+`;
+    }
+
+    prompt += `\nRespond accurately, concisely, and based only on this context.\n`;
+
+    console.log("🚀 Sending prompt to Gemini...");
+    
+    // Correct request format for v0.24.x
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }]
+        }
+      ]
+    });
+
+    console.log("✔ AI response received");
+
+    // Extract text safely
+    let answer =
+      result?.response?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      null;
+
+    if (!answer) {
+      console.error("❌ Could not extract answer:", result);
+      return res.status(500).json({ error: "AI response format invalid" });
+    }
+
+    return res.json({ answer });
+
+  } catch (err) {
+    console.error("🔥 AI Error:", err);
+    return res.status(500).json({
+      error: err.message || "Failed to get AI response"
+    });
+  }
+});
+
 
 // ------------------ Start Server ------------------
 const PORT = process.env.PORT || 3000;

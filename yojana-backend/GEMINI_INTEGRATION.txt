@@ -1,0 +1,37 @@
+// Add these lines at the top of server.js after the other requires:
+require('dotenv').config();
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Add these lines after app.use(cors()):
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "API_KEY_MISSING");
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+// Add this endpoint before the "Start Server" section:
+app.post("/ai-chat", async (req, res) => {
+  try {
+    const { query, schemeContext } = req.body;
+
+    if (!query) return res.status(400).json({ error: "Query is required" });
+
+    let prompt = `You are YojanaAI, a helpful government scheme assistant.
+User Query: ${query}
+`;
+
+    if (schemeContext) {
+      prompt += `
+Scheme Name: ${schemeContext.scheme_name}
+Eligibility: ${schemeContext.raw_eligibility}
+Benefits: ${schemeContext.benefits}
+`;
+    }
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    res.json({ answer: text });
+  } catch (error) {
+    console.error("AI Error:", error);
+    res.status(500).json({ error: "Failed to get AI response" });
+  }
+});
