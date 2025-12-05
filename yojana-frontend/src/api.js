@@ -3,7 +3,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000';
 export async function parseText(text) {
   const res = await fetch(`${BASE_URL}/parse`, {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text })
   });
   return res.json();
@@ -12,7 +12,7 @@ export async function parseText(text) {
 export async function recommendByText(text) {
   const res = await fetch(`${BASE_URL}/recommend`, {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text })
   });
   return res.json();
@@ -21,7 +21,7 @@ export async function recommendByText(text) {
 export async function recommendStructured(userObj) {
   const res = await fetch(`${BASE_URL}/recommend`, {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(userObj)
   });
   return res.json();
@@ -29,5 +29,25 @@ export async function recommendStructured(userObj) {
 
 export async function getScheme(slug) {
   const res = await fetch(`${BASE_URL}/scheme/${encodeURIComponent(slug)}`);
+  return res.json();
+}
+
+export async function askAI(query, schemeContext, userProfile) {
+  const res = await fetch(`${BASE_URL}/ai-chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, schemeContext, userProfile })
+  });
+  return res.json();
+}
+
+
+export async function aiRankedRecommend(text) {
+  const res = await fetch(`${BASE_URL}/ai-ranked-recommend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+
   return res.json();
 }
