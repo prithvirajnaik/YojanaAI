@@ -1,56 +1,144 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { askAI } from '../api';
 
 export default function SchemeModal({ scheme, onClose }) {
-  const [aiQuery, setAiQuery] = useState('');
-  const [aiResponse, setAiResponse] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
+    const [aiQuery, setAiQuery] = useState('');
+    const [aiResponse, setAiResponse] = useState('');
+    const [aiLoading, setAiLoading] = useState(false);
 
-  if (!scheme) return null;
+    const [language, setLanguage] = useState("en");
+    const [hindiData, setHindiData] = useState(null);
+    const [translating, setTranslating] = useState(false);
+    const [isPlaying, setIsPlaying] = useState(false);
 
-  async function handleAskAI() {
-    if (!aiQuery.trim()) return;
-    setAiLoading(true);
-    try {
-      const res = await askAI(aiQuery, scheme);
-      setAiResponse(res.answer || "Sorry, I couldn't get an answer.");
-    } catch (e) {
-      setAiResponse("Error connecting to AI.");
+    // STOP speech on close
+    useEffect(() => {
+        return () => window.speechSynthesis.cancel();
+    }, []);
+
+    async function translate(text) {
+        if (!text) return "";
+        try {
+            const res = await fetch(
+                `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hi&dt=t&q=${encodeURIComponent(text)}`
+            );
+            const data = await res.json();
+            return data[0].map(item => item[0]).join("");
+        } catch {
+            return text;
+        }
     }
-    setAiLoading(false);
-    setAiQuery('');
-  }
 
-  function handleQuickAsk(q) {
-    setAiQuery(q);
-    // slight delay to allow state update if we wanted to auto-submit, 
-    // but here we just fill it. 
-    // Actually let's auto-submit for better UX
-    setAiLoading(true);
-    askAI(q, scheme).then(res => {
-      setAiResponse(res.answer);
-      setAiLoading(false);
-      setAiQuery('');
-    });
-  }
+    async function switchToHindi() {
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
 
+        if (hindiData) {
+            setLanguage("hi");
+            return;
+        }
+
+        setTranslating(true);
+
+        const translated = {
+            benefits: await translate(scheme.benefits),
+            eligibility: await translate(scheme.raw_eligibility),
+            documents: await translate(scheme.documents),
+            application: await translate(scheme.application),
+        };
+
+        setHindiData(translated);
+        setLanguage("hi");
+        setTranslating(false);
+    }
+
+    function switchToEnglish() {
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
+        setLanguage("en");
+    }
+
+    function getDisplayData() {
+        if (language === "en") {
+            return {
+                benefits: scheme.benefits,
+                eligibility: scheme.raw_eligibility,
+                documents: scheme.documents,
+                application: scheme.application,
+            };
+        }
+        return hindiData || {};
+    }
+
+    async function speakAll() {
+        window.speechSynthesis.cancel();
+        setIsPlaying(true);
+
+        const display = getDisplayData();
+
+        let text = `
+${scheme.scheme_name}.
+Benefits: ${display.benefits || ""}.
+Eligibility: ${display.eligibility || ""}.
+Documents needed: ${display.documents || ""}.
+Application: ${display.application || ""}.
+        `;
+
+        let langCode = language === "hi" ? "hi-IN" : "en-IN";
+
+        // create speech object
+        const speakObj = () => {
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.lang = langCode;
+            utter.rate = 0.9;
+            utter.onend = () => setIsPlaying(false);
+            utter.onerror = () => setIsPlaying(false);
+
+            const voices = speechSynthesis.getVoices();
+            const voice = voices.find(v => v.lang === langCode);
+            if (voice) utter.voice = voice;
+
+            window.speechSynthesis.speak(utter);
+        };
+
+        // ensure voices exist
+        if (!window.speechSynthesis.getVoices().length) {
+            window.speechSynthesis.onvoiceschanged = speakObj;
+        } else {
+            speakObj();
+        }
+    }
+
+    function stopSpeech() {
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
+    }
+
+    const d = getDisplayData();
+
+    async function ask() {
+        if (!aiQuery.trim()) return;
+
+        setAiLoading(true);
+        try {
+            const res = await askAI(aiQuery, scheme);
+            setAiResponse(res.answer || "No response");
+        } catch {
+            setAiResponse("Error contacting AI");
+        }
+        setAiLoading(false);
+    }
   const schemeLink = scheme.slug
     ? `https://myscheme.gov.in/schemes/${scheme.slug}`
     : null;
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      {/* Outer container */}
-      <div className="bg-gray-800 border border-gray-700 max-w-2xl w-full rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+    return (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-4">
+            <div className="bg-gray-900 text-gray-200 w-full max-w-3xl max-h-[85vh] rounded-xl shadow-xl overflow-y-auto border border-gray-700">
 
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-700 flex justify-between items-center gap-4">
-
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold text-gray-100 leading-tight">
-              {scheme.scheme_name}
-            </h2>
-
-            {schemeLink && (
+                {/* HEADER */}
+                <div className="p-5 flex justify-between border-b border-gray-700">
+                    <h2 className="text-lg font-semibold text-white">{scheme.scheme_name}</h2>
+{schemeLink && (
               <a
                 href={schemeLink}
                 target="_blank"
@@ -74,148 +162,144 @@ export default function SchemeModal({ scheme, onClose }) {
                 </svg>
               </a>
             )}
-          </div>
-
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition p-1"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-
-        </div>
-
-        {/* Scrollable content */}
-        <div className="p-6 overflow-y-auto space-y-6 text-gray-300">
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</h3>
-              <p className="text-sm font-medium text-gray-200">{scheme.schemeCategory || "Not specified"}</p>
-            </div>
-            <div>
-              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Level</h3>
-              <p className="text-sm font-medium text-gray-200">{scheme.level || "Not specified"}</p>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-bold text-blue-400 mb-2">Benefits</h3>
-            <p className="text-sm leading-relaxed">{scheme.benefits || "Not available"}</p>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-bold text-blue-400 mb-2">Eligibility</h3>
-            <p className="text-sm leading-relaxed">{scheme.raw_eligibility || "Not specified"}</p>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-bold text-blue-400 mb-2">Documents Required</h3>
-            <p className="text-sm leading-relaxed">{scheme.documents || "Not specified"}</p>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-bold text-blue-400 mb-2">How to Apply</h3>
-            <p className="text-sm leading-relaxed break-words">{scheme.application || "Not available"}</p>
-          </div>
-          {/* AI Chat Section */}
-          <div className="mt-6 pt-6 border-t border-gray-700">
-            <h3 className="text-sm font-bold text-purple-400 mb-3 flex items-center gap-2">
-              ✨ Ask YojanaAI
-            </h3>
-
-            <div className="bg-gray-900/50 rounded-xl p-4 space-y-3">
-              {aiResponse && (
-                <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-3 text-sm text-gray-200 leading-relaxed animate-fade-in">
-                  <p className="whitespace-pre-wrap">{aiResponse}</p>
+                    <button onClick={() => { stopSpeech(); onClose(); }} className="text-gray-400 hover:text-white">
+                        ✖
+                    </button>
                 </div>
-              )}
 
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={aiQuery}
-                  onChange={(e) => setAiQuery(e.target.value)}
-                  placeholder="Ask about eligibility, documents, etc..."
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-purple-500"
-                  onKeyDown={(e) => e.key === 'Enter' && handleAskAI()}
-                />
-                <button
-                  onClick={handleAskAI}
-                  disabled={aiLoading}
-                  className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition"
-                >
-                  {aiLoading ? '...' : 'Ask'}
-                </button>
-              </div>
+                <div className="p-5 space-y-6">
 
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                <button
-                  onClick={() => handleQuickAsk("Summarize this scheme in 2 lines")}
-                  className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-3 py-1.5 rounded-full border border-gray-700 whitespace-nowrap transition"
-                >
-                  Summarize
-                </button>
-                <button
-                  onClick={() => handleQuickAsk("Am I eligible for this?")}
-                  className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-3 py-1.5 rounded-full border border-gray-700 whitespace-nowrap transition"
-                >
-                  Check Eligibility
-                </button>
-                <button
-                  onClick={() => handleQuickAsk("What documents do I need?")}
-                  className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-3 py-1.5 rounded-full border border-gray-700 whitespace-nowrap transition"
-                >
-                  Documents
-                </button>
-              </div>
+                    {/* LANGUAGE BUTTONS */}
+                    <div className="flex gap-2">
+                        <button
+                            onClick={switchToEnglish}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                                language === "en" ? "bg-blue-600 text-white" : "bg-gray-700"
+                            }`}
+                        >
+                            🇬🇧 English
+                        </button>
+
+                        <button
+                            onClick={switchToHindi}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                                language === "hi" ? "bg-orange-600 text-white" : "bg-gray-700"
+                            }`}
+                        >
+                            🇮🇳 हिन्दी
+                        </button>
+                    </div>
+
+                    {translating && (
+                        <p className="text-yellow-300 text-sm">Translating… please wait</p>
+                    )}
+
+                    {/* AUDIO */}
+                    <div>
+                        {!isPlaying ? (
+                            <button
+                                onClick={speakAll}
+                                className="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                            >
+                                🔊 Read Full Information
+                            </button>
+                        ) : (
+                            <button
+                                onClick={stopSpeech}
+                                className="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                            >
+                                Stop Audio ❌
+                            </button>
+                        )}
+                    </div>
+
+                    {/* BENEFITS */}
+                    <div>
+                        <h3 className="text-blue-400 font-semibold">Benefits</h3>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {d.benefits || "Not Provided"}
+                        </p>
+                    </div>
+
+                    {/* ELIGIBILITY */}
+                    <div>
+                        <h3 className="text-blue-400 font-semibold">Eligibility</h3>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {d.eligibility || "Not Provided"}
+                        </p>
+                    </div>
+
+                    {/* DOCUMENTS */}
+                    <div>
+                        <h3 className="text-blue-400 font-semibold">Documents Required</h3>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {d.documents || "Not Provided"}
+                        </p>
+                    </div>
+
+                    {/* APPLICATION */}
+                    <div>
+                        <h3 className="text-blue-400 font-semibold">How to Apply</h3>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {d.application || "Not Provided"}
+                        </p>
+                    </div>
+
+                    {/* AI CHAT */}
+                    <div className="border-t border-gray-700 pt-4">
+                        <h3 className="text-purple-400 text-sm font-semibold mb-2">Ask AI about this scheme</h3>
+
+                        {aiResponse && (
+                            <p className="border border-purple-500 rounded-lg p-2 text-sm whitespace-pre-wrap">
+                                {aiResponse}
+                            </p>
+                        )}
+
+                        <div className="flex gap-2">
+                            <input
+                                value={aiQuery}
+                                onChange={e => setAiQuery(e.target.value)}
+                                placeholder="Ask about eligibility or documents..."
+                                className="flex-1 bg-gray-800 px-3 py-2 rounded-lg border border-gray-600 text-sm"
+                            />
+                            <button
+                                className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm"
+                                onClick={ask}
+                                disabled={aiLoading}
+                            >
+                                {aiLoading ? "..." : "Ask"}
+                            </button>
+                            
+                        </div>
+                    </div>
+                    {/* === DOWNLOAD PDF ALWAYS === */}
+                    <div className="pt-4 border-t border-gray-700 flex flex-col gap-3">
+                        <button
+                            onClick={() => window.open(`http://localhost:3000/pdf/${scheme.slug}`, "_blank")}
+                            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white rounded-lg font-medium transition shadow-md hover:shadow-lg"
+                        >
+                            ⬇ Download Required Documents PDF
+                        </button>
+
+                        {scheme.url && (
+                            <a
+                                href={scheme.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center justify-center gap-2 px-4 py-2 text-blue-400 hover:text-blue-300 text-sm font-medium transition"
+                            >
+                                Visit Official Website
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+                                    <path fillRule="evenodd" d="M3 3h7a1 1 0 010 2H6.414l9.293 9.293a1 1 0 11-1.414 1.414L5 6.414V10a1 1 0 01-2 0V4a1 1 0 011-1z" clipRule="evenodd" />
+                                </svg>
+                            </a>
+                        )}
+                    </div>
+
+                </div>
+
             </div>
-          </div>
-
-          {/* Bottom Section */}
-          <div className="pt-4 border-t border-gray-700 flex flex-col gap-4">
-
-            {/* Official Link (conditionally visible) */}
-            {scheme.url && (
-              <a
-                href={scheme.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm font-medium"
-              >
-                Visit Official Website
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                  <path fillRule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clipRule="evenodd" />
-                  <path fillRule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clipRule="evenodd" />
-                </svg>
-              </a>
-            )}
-
-            {/* Download PDF button ALWAYS visible */}
-            <button
-              style={{
-                padding: "10px",
-                background: "#4f46e5",
-                color: "white",
-                borderRadius: "8px",
-                border: "none",
-                cursor: "pointer",
-                marginTop: "10px",
-                fontWeight: "600"
-              }}
-              onClick={() => {
-                window.open(`http://localhost:3000/pdf/${scheme.slug}`, "_blank");
-              }}
-            >
-              ⬇ Download Required Documents PDF
-            </button>
-
-          </div>
-
         </div>
-      </div>
-    </div>
-  );
+        
+    );
 }

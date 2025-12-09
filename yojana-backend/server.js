@@ -207,22 +207,29 @@ app.post("/recommend", (req, res) => {
     }
   }
 
-  // STRICT FILTERING (income, state, gender)
+  // Strict filter (soft conditions)
   const filtered = candidates.filter(s => {
-    const schemeGender = (s.gender || "").toLowerCase();
-    const userGender = (user.gender || "").toLowerCase();
+ // ---------- STRICT GENDER FILTER ----------
+  if (user.gender && s.gender) {
+    const ug = user.gender.toLowerCase();
+    const sg = s.gender.toLowerCase();
 
-    // STRICT GENDER FILTER:
-    if (userGender) {
-      if (userGender === "female" && schemeGender === "male") return false;
-      if (userGender === "male" && schemeGender === "female") return false;
+    // Strict reject
+    if ((sg === "female" || sg === "women" || sg === "girl") && ug === "male") {
+      return false;
     }
+    if ((sg === "male" || sg === "men" || sg === "boy") && ug === "female") {
+      return false;
+    }
+  }
 
-    return (
-      checkIncome(user.income, parseSchemeIncome(s.income_limit)) &&
-      checkState(user.state, s.state_or_scope)
-    );
-  });
+  // Soft combined matching
+  return (
+    checkIncome(user.income, parseSchemeIncome(s.income_limit)) &&
+    checkState(user.state, s.state_or_scope) &&
+    checkGender(user.gender, s.gender)
+  );
+});
 
   if (filtered.length === 0) {
     const fallback = fuse.search(body.text || "").slice(0, 8).map(r => r.item);
@@ -237,19 +244,25 @@ app.post("/recommend", (req, res) => {
   // ⭐ SCORE FUNCTION with keyword awareness
   function scoreScheme(scheme) {
     const text = originalText;
+
     let score = 0;
 
+    // STRONG matching keywords
     if (text.includes("student") && scheme.target_groups?.includes("student")) score += 20;
     if (text.includes("farmer") && scheme.target_groups?.includes("farmer")) score += 20;
     if (text.includes("entrepreneur") && scheme.details?.toLowerCase().includes("entrepreneur")) score += 15;
     if (text.includes("scholarship") && scheme.schemeCategory?.toLowerCase().includes("scholar")) score += 25;
 
+    // Base score (soft matching)
     if (checkTargets(user.tags, scheme.target_groups)) score += 5;
     if (checkState(user.state, scheme.state_or_scope)) score += 3;
+    if (checkGender(user.gender, scheme.gender)) score += 2;
     if (checkIncome(user.income, parseSchemeIncome(scheme.income_limit))) score += 2;
 
+    // Prefer concise readable schemes
     if (scheme.details && scheme.details.length < 300) score += 3;
 
+    // Penalize schemes with no filtering criteria (too generic)
     if (!scheme.income_limit && (!scheme.gender || scheme.gender === "all") &&
       (scheme.state_or_scope === "All" || !scheme.state_or_scope)) score -= 5;
 
@@ -262,7 +275,7 @@ app.post("/recommend", (req, res) => {
     score: scoreScheme(s)
   }));
 
-  // ⭐ Diversity Booster
+  // ⭐ Diversity Booster (avoid same ministry/state spam)
   function diversityAdjust(list) {
     const seenMinistry = new Set();
     const seenCategory = new Set();
@@ -279,25 +292,29 @@ app.post("/recommend", (req, res) => {
   }
 
   scored = diversityAdjust(scored);
+
   scored.sort((a, b) => b.score - a.score);
 
-  // Shuffle ties
+  // ⭐ Shuffle ties (makes combinations different each time)
   function randomizeTie(list) {
     const result = [];
     let i = 0;
 
     while (i < list.length) {
-      const base = list[i].score;
+      const baseScore = list[i].score;
       let group = [list[i]];
       let j = i + 1;
 
-      while (j < list.length && list[j].score === base) {
+      while (j < list.length && list[j].score === baseScore) {
         group.push(list[j]);
         j++;
       }
 
+      // Shuffle group
       group = group.sort(() => Math.random() - 0.5);
+
       result.push(...group);
+
       i = j;
     }
 
@@ -305,6 +322,7 @@ app.post("/recommend", (req, res) => {
   }
 
   scored = randomizeTie(scored);
+
   const topItems = scored.slice(0, 8).map(x => x.scheme);
 
   res.json({
@@ -314,7 +332,6 @@ app.post("/recommend", (req, res) => {
     user
   });
 });
-
 
 
 // Get single scheme
@@ -426,6 +443,109 @@ app.get("/pdf/:slug", (req, res) => {
 });
 
 
+// ---------------------------------------
+// AI-Powered Enhanced Recommendation
+// ---------------------------------------
+app.post("/ai-ranked-recommend", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "text required" });
+
+    // First use your existing backend recommender
+    const simpleRec = await recommendInput(text);
+
+    if (!simpleRec.items || simpleRec.items.length === 0) {
+      return res.json({
+        error: "No filtered schemes to analyze",
+        fallback: simpleRec,
+      });
+    }
+
+    // Take only best 15 to reduce token usage
+    const sample = simpleRec.items.slice(0, 15);
+
+    // Prepare compressed info for Gemini
+    const shortList = sample.map(s => ({
+      name: s.scheme_name,
+      benefit: s.benefits?.slice(0, 80),   // shorten for tokens
+      eligibility: s.raw_eligibility?.slice(0, 100), // shorten
+      state: s.state_or_scope,
+      category: s.schemeCategory
+    }));
+
+    const prompt = `
+You are an intelligent ranking engine.
+A user has asked: "${text}"
+
+You are given schemes (compressed JSON).
+Rank based on how likely the user qualifies.
+For each scheme return:
+
+{
+ "name",
+ "score",
+ "reason"
+}
+
+Rules:
+- Higher income threshold matches better
+- If user mentions student/women/farmer, boost matching categories
+- If state matches → add score
+- Penalize unclear eligibility
+
+Here is compressed data:
+${JSON.stringify(shortList)}
+`;
+
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }]
+    });
+
+    const answerText =
+      result?.response?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "";
+
+    if (!answerText) {
+      return res.json({
+        fallbackUsed: true,
+        answer: shortList // failsafe
+      });
+    }
+
+    return res.json({ ranked: answerText, original: shortList });
+
+  } catch (err) {
+    console.error("🔥 AI ranked error:", err);
+    res.status(500).json({ error: err.message || "AI rank failed" });
+  }
+});
+
+async function recommendInput(text) {
+  return new Promise((resolve, reject) => {
+    const fakeReq = {
+      body: { text },
+      method: "POST",
+      url: "/recommend"
+    };
+
+    // Fake response for capturing JSON output
+    const fakeRes = {
+      json: result => resolve(result),
+      status: () => fakeRes, // allow chaining
+      send: result => resolve(result)
+    };
+
+    const layer = app._router.stack.find(
+      route => route.route && route.route.path === "/recommend"
+    );
+
+    if (!layer) return reject("Recommend route not found");
+
+    // Manually run handler
+    const handler = layer.route.stack[0].handle;
+    handler(fakeReq, fakeRes);
+  });
+}
 
 
 // ------------------ AI Chat Endpoint ------------------
@@ -466,7 +586,7 @@ Tags: ${userProfile.tags?.join(", ") || "None"}
     prompt += `\nRespond accurately, concisely, and based only on this context.\n`;
 
     console.log("🚀 Sending prompt to Gemini...");
-    
+
     // Correct request format for v0.24.x
     const result = await model.generateContent({
       contents: [
@@ -504,4 +624,4 @@ Tags: ${userProfile.tags?.join(", ") || "None"}
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
-});
+});                    
